@@ -178,7 +178,8 @@ RUN GPG_KEYS=B0F4253373F8F6F510D42178520A9993A1C052F8 \
         && apk del .amplify 
 
 COPY ./entrypoint.sh /entrypoint.sh
-COPY conf/log_format.conf /etc/nginx/conf.d/log_format.conf
+COPY conf/nginx.conf /etc/nginx/nginx.conf
+COPY conf/nginx.vh.default.conf /etc/nginx/conf.d/default.conf
 COPY conf/stub_status.conf /etc/nginx/conf.d/stub_status.conf
 
 EXPOSE 80
