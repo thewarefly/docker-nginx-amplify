@@ -1,53 +1,189 @@
-FROM byjg/nginx-extras:1.13
-MAINTAINER NGINX Amplify Engineering
+FROM alpine:3.8
 
-# Install the NGINX Amplify Agent
-RUN apt-get update \
-    && apt-get install -qqy curl python apt-transport-https apt-utils gnupg1 procps \
-    && echo 'deb https://packages.amplify.nginx.com/debian/ stretch amplify-agent' > /etc/apt/sources.list.d/nginx-amplify.list \
-    && curl -fs https://nginx.org/keys/nginx_signing.key | apt-key add - > /dev/null 2>&1 \
-    && apt-get update \
-    && apt-get install -qqy nginx-amplify-agent \
-    && apt-get purge -qqy curl apt-transport-https apt-utils gnupg1 \
-    && rm -rf /etc/apt/sources.list.d/nginx-amplify.list \
-    && rm -rf /var/lib/apt/lists/*
+LABEL maintainer="NGINX Docker Maintainers <docker-maint@nginx.com>"
 
-# Keep the nginx logs inside the container
-RUN unlink /var/log/nginx/access.log \
-    && unlink /var/log/nginx/error.log \
-    && touch /var/log/nginx/access.log \
-    && touch /var/log/nginx/error.log \
-    && chown nginx /var/log/nginx/*log \
-    && chmod 644 /var/log/nginx/*log
+ENV NGINX_VERSION 1.14.2
+ENV MORE_SET_HEADER_VERSION 0.33
 
-# Copy nginx stub_status config
-COPY ./conf.d/stub_status.conf /etc/nginx/conf.d
-
-# API_KEY is required for configuring the NGINX Amplify Agent.
-# It could be your real API key for NGINX Amplify here if you wanted
-# to build your own image to host it in a private registry.
-# However, including private keys in the Dockerfile is not recommended.
-# Use the environment variables at runtime as described below.
-
-#ENV API_KEY 1234567890
-
-# If AMPLIFY_IMAGENAME is set, the startup wrapper script will use it to
-# generate the 'imagename' to put in the /etc/amplify-agent/agent.conf
-# If several instances use the same 'imagename', the metrics will
-# be aggregated into a single object in NGINX Amplify. Otherwise Amplify
-# will create separate objects for monitoring (an object per instance).
-# AMPLIFY_IMAGENAME can also be passed to the instance at runtime as
-# described below.
-
-#ENV AMPLIFY_IMAGENAME my-docker-instance-123
-
-# The /entrypoint.sh script will launch nginx and the Amplify Agent.
-# The script honors API_KEY and AMPLIFY_IMAGENAME environment
-# variables, and updates /etc/amplify-agent/agent.conf accordingly.
+RUN GPG_KEYS=B0F4253373F8F6F510D42178520A9993A1C052F8 \
+	&& CONFIG="\
+        --prefix=/etc/nginx \
+        --sbin-path=/usr/sbin/nginx \
+        --modules-path=/usr/lib/nginx/modules \
+        --conf-path=/etc/nginx/nginx.conf \
+        --error-log-path=/var/log/nginx/error.log \
+        --http-log-path=/var/log/nginx/access.log \
+        --pid-path=/var/run/nginx.pid \
+        --lock-path=/var/run/nginx.lock \
+        --http-client-body-temp-path=/var/cache/nginx/client_temp \
+        --http-proxy-temp-path=/var/cache/nginx/proxy_temp \
+        --http-fastcgi-temp-path=/var/cache/nginx/fastcgi_temp \
+        --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
+        --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
+        --user=nginx \
+        --group=nginx \
+        --with-http_ssl_module \
+        --with-http_realip_module \
+        --with-http_addition_module \
+        --with-http_sub_module \
+        --with-http_dav_module \
+        --with-http_flv_module \
+        --with-http_mp4_module \
+        --with-http_gunzip_module \
+        --with-http_gzip_static_module \
+        --with-http_random_index_module \
+        --with-http_secure_link_module \
+        --with-http_stub_status_module \
+        --with-http_auth_request_module \
+        --with-http_xslt_module=dynamic \
+        --with-http_image_filter_module=dynamic \
+        --with-http_geoip_module=dynamic \
+        --with-threads \
+        --with-stream \
+        --with-stream_ssl_module \
+        --with-stream_ssl_preread_module \
+        --with-stream_realip_module \
+        --with-stream_geoip_module=dynamic \
+        --with-http_slice_module \
+        --with-mail \
+        --with-mail_ssl_module \
+        --with-compat \
+        --with-file-aio \
+        --with-http_v2_module \
+        --add-module=/headers-more-nginx-module-$MORE_SET_HEADER_VERSION \
+	" \
+	&& addgroup -S nginx \
+	&& adduser -D -S -h /var/cache/nginx -s /sbin/nologin -G nginx nginx \
+	&& apk add --no-cache --virtual .build-deps \
+		gcc \
+		libc-dev \
+		make \
+		openssl-dev \
+		pcre-dev \
+		zlib-dev \
+		linux-headers \
+		curl \
+		gnupg1 \
+		libxslt-dev \
+		gd-dev \
+		geoip-dev \
+	&& curl -fSL https://github.com/openresty/headers-more-nginx-module/archive/v$MORE_SET_HEADER_VERSION.tar.gz -o $MORE_SET_HEADER_VERSION.tar.gz \
+    && tar xvf $MORE_SET_HEADER_VERSION.tar.gz \
+	&& curl -fSL https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz -o nginx.tar.gz \
+	&& curl -fSL https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz.asc  -o nginx.tar.gz.asc \
+	&& export GNUPGHOME="$(mktemp -d)" \
+	&& found=''; \
+	for server in \
+		ha.pool.sks-keyservers.net \
+		hkp://keyserver.ubuntu.com:80 \
+		hkp://p80.pool.sks-keyservers.net:80 \
+		pgp.mit.edu \
+	; do \
+		echo "Fetching GPG key $GPG_KEYS from $server"; \
+		gpg --keyserver "$server" --keyserver-options timeout=10 --recv-keys "$GPG_KEYS" && found=yes && break; \
+	done; \
+	test -z "$found" && echo >&2 "error: failed to fetch GPG key $GPG_KEYS" && exit 1; \
+	gpg --batch --verify nginx.tar.gz.asc nginx.tar.gz \
+	&& rm -rf "$GNUPGHOME" nginx.tar.gz.asc \
+	&& mkdir -p /usr/src \
+	&& tar -zxC /usr/src -f nginx.tar.gz \
+	&& rm nginx.tar.gz \
+	&& cd /usr/src/nginx-$NGINX_VERSION \
+	&& ./configure $CONFIG --with-debug \
+	&& make -j$(getconf _NPROCESSORS_ONLN) \
+	&& mv objs/nginx objs/nginx-debug \
+	&& mv objs/ngx_http_xslt_filter_module.so objs/ngx_http_xslt_filter_module-debug.so \
+	&& mv objs/ngx_http_image_filter_module.so objs/ngx_http_image_filter_module-debug.so \
+	&& mv objs/ngx_http_geoip_module.so objs/ngx_http_geoip_module-debug.so \
+	&& mv objs/ngx_stream_geoip_module.so objs/ngx_stream_geoip_module-debug.so \
+	&& ./configure $CONFIG \
+	&& make -j$(getconf _NPROCESSORS_ONLN) \
+	&& make install \
+	&& rm -rf /etc/nginx/html/ \
+	&& mkdir /etc/nginx/conf.d/ \
+	&& mkdir -p /usr/share/nginx/html/ \
+	&& install -m644 html/index.html /usr/share/nginx/html/ \
+	&& install -m644 html/50x.html /usr/share/nginx/html/ \
+	&& install -m755 objs/nginx-debug /usr/sbin/nginx-debug \
+	&& install -m755 objs/ngx_http_xslt_filter_module-debug.so /usr/lib/nginx/modules/ngx_http_xslt_filter_module-debug.so \
+	&& install -m755 objs/ngx_http_image_filter_module-debug.so /usr/lib/nginx/modules/ngx_http_image_filter_module-debug.so \
+	&& install -m755 objs/ngx_http_geoip_module-debug.so /usr/lib/nginx/modules/ngx_http_geoip_module-debug.so \
+	&& install -m755 objs/ngx_stream_geoip_module-debug.so /usr/lib/nginx/modules/ngx_stream_geoip_module-debug.so \
+	&& ln -s ../../usr/lib/nginx/modules /etc/nginx/modules \
+	&& strip /usr/sbin/nginx* \
+	&& strip /usr/lib/nginx/modules/*.so \
+	&& rm -rf /usr/src/nginx-$NGINX_VERSION \
+        \
+	# Bring in gettext so we can get `envsubst`, then throw
+	# the rest away. To do this, we need to install `gettext`
+	# then move `envsubst` out of the way so `gettext` can
+	# be deleted completely, then move `envsubst` back.
+	&& apk add --no-cache --virtual .gettext gettext \
+	&& mv /usr/bin/envsubst /tmp/ \
+	\
+	&& runDeps="$( \
+		scanelf --needed --nobanner --format '%n#p' /usr/sbin/nginx /usr/lib/nginx/modules/*.so /tmp/envsubst \
+			| tr ',' '\n' \
+			| sort -u \
+			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+	)" \
+	&& apk add --no-cache --virtual .nginx-rundeps $runDeps \
+	&& apk del .build-deps \
+	&& apk del .gettext \
+    && rm /$MORE_SET_HEADER_VERSION.tar.gz \
+    && rm -rf /headers-more-nginx-module-$MORE_SET_HEADER_VERSION \
+	&& mv /tmp/envsubst /usr/local/bin/ \
+	\
+	# Bring in tzdata so users could set the timezones through the environment
+	# variables
+	&& apk add --no-cache tzdata \
+	\
+        ### Amplify specific section starts here
+        # make sure log files are agent-readable
+        && touch /var/log/nginx/access.log \
+        && touch /var/log/nginx/error.log \
+        \
+        # Install packages required by agent
+        && apk add --no-cache python \ 
+        procps \
+        util-linux \
+        py-pip \
+        \
+        # install packages required for agent build
+        && apk add --no-cache --virtual .amplify\
+        python-dev \
+        build-base \
+        git \
+        linux-headers \
+        && cd / \
+        \
+        # clone latest agent from repository and build it
+        && git clone https://github.com/nginxinc/nginx-amplify-agent \
+        && cd nginx-amplify-agent/ \
+        && pip install --no-cache-dir -r packages/nginx-amplify-agent/requirements.txt \
+        && python setup.py install \
+        \
+        # make sure agent log exists
+        && mkdir -p /var/log/amplify-agent \
+        && touch /var/log/amplify-agent/agent.log \
+        \
+        # create agent config file
+        && cp /etc/amplify-agent/agent.conf.default /etc/amplify-agent/agent.conf \
+        \
+        # Cleanup
+        && cd .. \
+        && rm -Rf nginx-amplify-agent/ \
+        && find /usr/lib/python2.7 -name \*\.pyo -exec rm {} \; \
+        && find /usr/lib/python2.7 -name \*\.pyc -exec rm {} \; \
+        && apk del .amplify 
 
 COPY ./entrypoint.sh /entrypoint.sh
+COPY conf/nginx.conf /etc/nginx/nginx.conf
+COPY conf/nginx.vh.default.conf /etc/nginx/conf.d/default.conf
+COPY conf/stub_status.conf /etc/nginx/conf.d/stub_status.conf
 
-# TO set/override API_KEY and AMPLIFY_IMAGENAME when starting an instance:
-# docker run --name my-nginx1 -e API_KEY='..effc' -e AMPLIFY_IMAGENAME="service-name" -d nginx-amplify
+EXPOSE 80
+
+STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/entrypoint.sh"]
