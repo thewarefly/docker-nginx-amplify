@@ -16,7 +16,7 @@
 # Variables
 agent_conf_file="/etc/amplify-agent/agent.conf"
 agent_log_file="/var/log/amplify-agent/agent.log"
-nginx_status_conf="/etc/nginx/conf.d/stub_status.conf"
+nginx_status_conf="/etc/nginx/default/stub_status.conf"
 api_key=""
 amplify_imagename=""
 
