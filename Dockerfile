@@ -1,4 +1,4 @@
-FROM nginx:1.13
+FROM byjg/nginx-extras:1.13
 MAINTAINER NGINX Amplify Engineering
 
 # Install the NGINX Amplify Agent
